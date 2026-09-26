@@ -1,199 +1,271 @@
-from difflib import SequenceMatcher
+import difflib
 
 
 class RepetitionDetector:
 
+    # Actions that should not influence repetition detection
     NOISE_ACTIONS = {
         "mouse_move",
         "mouse_click",
-        "keyboard_type",
-        "keyboard_press",
+        "keyboard_input",
         "window_focus",
-        "application_focus",
         "scroll",
-        "cursor_move",
+        "idle",
     }
 
+    # Equivalent action names
     NORMALIZATION_MAP = {
-        "open_email": "gmail_read_email",
         "read_email": "gmail_read_email",
-        "gmail_open_email": "gmail_read_email",
+        "gmail_read": "gmail_read_email",
 
         "download_attachment": "gmail_download_attachment",
         "gmail_download": "gmail_download_attachment",
 
         "search_customer": "crm_search_customer",
-        "crm_find_customer": "crm_search_customer",
+        "crm_search": "crm_search_customer",
 
         "update_customer": "crm_update_customer",
-        "crm_edit_customer": "crm_update_customer",
+        "crm_update": "crm_update_customer",
 
-        "send_slack": "slack_send_message",
-        "slack_message": "slack_send_message",
+        "send_message": "slack_send_message",
+        "slack_send": "slack_send_message",
     }
 
-    def __init__(
-        self,
-        min_repetitions=2,
-        similarity_threshold=0.70
-    ):
-        self.min_repetitions = min_repetitions
-        self.similarity_threshold = similarity_threshold
-
     def normalize_action(self, action):
+        """
+        Convert different action names into a standard form.
+        """
 
         if not action:
             return None
 
-        action = action.strip().lower()
+        action = str(action).strip().lower()
 
         if action in self.NOISE_ACTIONS:
             return None
 
-        return self.NORMALIZATION_MAP.get(
-            action,
-            action
-        )
+        return self.NORMALIZATION_MAP.get(action, action)
 
     def normalize_session(self, session):
+        """
+        Extract actions from different session formats.
 
-        normalized = []
+        Supports:
 
-        for action in session:
+        [
+            "gmail_read_email",
+            "crm_search_customer"
+        ]
 
-            action = self.normalize_action(action)
+        OR:
 
-            if action is None:
-                continue
+        {
+            "session_id": "...",
+            "activities": [
+                {"application": "Gmail", "action": "gmail_read_email"}
+            ]
+        }
+        """
 
-            # Remove consecutive duplicate actions
-            if normalized and normalized[-1] == action:
-                continue
+        actions = []
 
-            normalized.append(action)
+        # -----------------------------------------
+        # Session is a dictionary
+        # -----------------------------------------
+        if isinstance(session, dict):
 
-        return normalized
+            # Normal WorkFlowOS observer format
+            if "activities" in session:
+
+                activities = session.get("activities", [])
+
+                for activity in activities:
+
+                    if isinstance(activity, dict):
+
+                        action = activity.get("action")
+
+                    else:
+
+                        action = activity
+
+                    normalized = self.normalize_action(action)
+
+                    if normalized:
+                        actions.append(normalized)
+
+            # Alternative format
+            elif "actions" in session:
+
+                for action in session.get("actions", []):
+
+                    if isinstance(action, dict):
+                        action = action.get("action")
+
+                    normalized = self.normalize_action(action)
+
+                    if normalized:
+                        actions.append(normalized)
+
+        # -----------------------------------------
+        # Session is a list
+        # -----------------------------------------
+        elif isinstance(session, list):
+
+            for item in session:
+
+                if isinstance(item, dict):
+                    action = item.get("action")
+                else:
+                    action = item
+
+                normalized = self.normalize_action(action)
+
+                if normalized:
+                    actions.append(normalized)
+
+        return actions
 
     def similarity(self, sequence_a, sequence_b):
+        """
+        Calculate similarity between two action sequences.
+        """
 
         if not sequence_a or not sequence_b:
             return 0.0
 
-        return SequenceMatcher(
+        return difflib.SequenceMatcher(
             None,
             sequence_a,
             sequence_b
         ).ratio()
 
-    def find_similar_sessions(self, sessions):
+    def find_similar_sessions(
+        self,
+        sessions,
+        similarity_threshold=0.75
+    ):
+        """
+        Find sessions containing similar workflows.
+        """
 
-        groups = []
+        normalized_sessions = []
 
         for session in sessions:
 
-            normalized = self.normalize_session(session)
+            sequence = self.normalize_session(session)
 
-            if not normalized:
-                continue
+            if sequence:
+                normalized_sessions.append(sequence)
 
-            added_to_group = False
+        if len(normalized_sessions) < 2:
+            return {
+                "occurrences": 0,
+                "average_similarity": 0.0,
+                "sessions": []
+            }
 
-            for group in groups:
+        similar_sessions = []
 
-                representative = group[0]
+        for i in range(len(normalized_sessions)):
 
-                score = self.similarity(
-                    normalized,
-                    representative
+            for j in range(i + 1, len(normalized_sessions)):
+
+                similarity = self.similarity(
+                    normalized_sessions[i],
+                    normalized_sessions[j]
                 )
 
-                if score >= self.similarity_threshold:
+                if similarity >= similarity_threshold:
 
-                    group.append(normalized)
-                    added_to_group = True
-                    break
+                    similar_sessions.append(
+                        (
+                            normalized_sessions[i],
+                            normalized_sessions[j],
+                            similarity
+                        )
+                    )
 
-            if not added_to_group:
-                groups.append([normalized])
+        if not similar_sessions:
 
-        return groups
+            return {
+                "occurrences": 0,
+                "average_similarity": 0.0,
+                "sessions": []
+            }
+
+        average_similarity = sum(
+            item[2]
+            for item in similar_sessions
+        ) / len(similar_sessions)
+
+        # Keep unique sequences
+        unique_sessions = []
+
+        for sequence in normalized_sessions:
+
+            if sequence not in unique_sessions:
+                unique_sessions.append(sequence)
+
+        return {
+            "occurrences": len(similar_sessions) + 1,
+            "average_similarity": average_similarity,
+            "sessions": unique_sessions
+        }
 
     def detect(self, sessions):
 
-        if not sessions:
+        result = self.find_similar_sessions(sessions)
+
+        if result["occurrences"] < 2:
             return None
 
-        groups = self.find_similar_sessions(sessions)
-
-        repeated_groups = [
-            group
-            for group in groups
-            if len(group) >= self.min_repetitions
-        ]
-
-        if not repeated_groups:
-            return None
-
-        repeated_groups.sort(
-            key=len,
-            reverse=True
-        )
-
-        group = repeated_groups[0]
-
-        representative = group[0]
-
-        similarities = [
-            self.similarity(
-                representative,
-                sequence
-            )
-            for sequence in group
-        ]
-
-        average_similarity = (
-            sum(similarities) / len(similarities)
-        )
+        # Use the first repeated sequence as the detected workflow
+        sequence = result["sessions"][0]
 
         return {
-            "sequence": representative,
-            "occurrences": len(group),
-            "average_similarity": round(
-                average_similarity,
-                2
-            ),
-            "sessions": group,
+            "sequence": sequence,
+            "occurrences": result["occurrences"],
+            "average_similarity": result["average_similarity"],
+            "sessions": result["sessions"]
         }
 
     def is_repeated(self, sessions):
 
-        return self.detect(sessions) is not None
+        result = self.detect(sessions)
+
+        return result is not None
 
     def display_result(self, result):
 
+        print("\n" + "=" * 60)
+        print("🔍 REPETITION DETECTION RESULT")
+        print("=" * 60)
+
         if not result:
+
             print("\n❌ No repeated workflow detected.")
             return
 
-        print("\n" + "=" * 55)
-        print("🔔 REPEATED WORKFLOW DETECTED")
-        print("=" * 55)
-
         print(
-            f"\nOccurrences: {result['occurrences']}"
+            f"\nOccurrences: "
+            f"{result['occurrences']}"
         )
 
         print(
-            f"Similarity: "
-            f"{result['average_similarity'] * 100:.0f}%"
+            f"Average Similarity: "
+            f"{result['average_similarity']:.2f}"
         )
 
-        print("\nDetected workflow:")
+        print("\nDetected Workflow:")
 
         for index, action in enumerate(
             result["sequence"],
             start=1
         ):
-            print(f"  {index}. {action}")
 
-        print("\n" + "=" * 55)
+            print(
+                f"  [{index}] {action}"
+            )
+
+        print("=" * 60)

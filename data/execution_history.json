@@ -1,1 +1,176 @@
-[]
+{
+  "executions": [
+    {
+      "execution_id": "execution-1",
+      "timestamp": "2026-09-26T14:07:39.457493",
+      "workflow_name": "Process Customer Request",
+      "status": "completed",
+      "success": true,
+      "execution_history": []
+    },
+    {
+      "execution_id": "execution-2",
+      "timestamp": "2026-09-26T14:16:40.312740",
+      "workflow_name": "Unnamed Workflow",
+      "status": "completed",
+      "success": true,
+      "execution_history": [
+        {
+          "step": {
+            "step": 1,
+            "tool": "gmail_read_email",
+            "parameters": {},
+            "depends_on": [],
+            "description": "Read the customer email"
+          },
+          "result": {
+            "success": true,
+            "tool": "gmail_read_email",
+            "step": 1,
+            "result": {
+              "success": true,
+              "email_id": "EMAIL-001",
+              "customer": "ABC Ltd",
+              "sender": "sales@abcltd.com",
+              "subject": "Quotation Request",
+              "body": "Please send us a quotation.",
+              "attachment": "quotation.pdf"
+            }
+          }
+        },
+        {
+          "step": {
+            "step": 2,
+            "tool": "gmail_download_attachment",
+            "parameters": {
+              "filename": "quotation.pdf"
+            },
+            "depends_on": [
+              1
+            ],
+            "description": "Download the quotation attachment"
+          },
+          "result": {
+            "success": true,
+            "tool": "gmail_download_attachment",
+            "step": 2,
+            "result": {
+              "success": true,
+              "filename": "quotation.pdf",
+              "status": "downloaded",
+              "path": "/mock_workspace/quotation.pdf"
+            }
+          }
+        },
+        {
+          "step": {
+            "step": 3,
+            "tool": "crm_search_customer",
+            "parameters": {
+              "customer": "ABC Ltd"
+            },
+            "depends_on": [
+              2
+            ],
+            "description": "Find the customer in CRM"
+          },
+          "result": {
+            "success": true,
+            "tool": "crm_search_customer",
+            "step": 3,
+            "result": {
+              "success": true,
+              "found": true,
+              "customer_id": "CRM-001",
+              "customer": "ABC Ltd",
+              "email": "sales@abcltd.com"
+            }
+          }
+        },
+        {
+          "step": {
+            "step": 4,
+            "tool": "crm_update_customer",
+            "parameters": {
+              "customer_id": "CRM-001",
+              "request": "New quotation required",
+              "attachment": "quotation.pdf"
+            },
+            "depends_on": [
+              3
+            ],
+            "description": "Update the customer record"
+          },
+          "result": {
+            "success": true,
+            "tool": "crm_update_customer",
+            "step": 4,
+            "result": {
+              "success": true,
+              "customer_id": "CRM-001",
+              "status": "updated",
+              "request": "New quotation required",
+              "attachment": "quotation.pdf"
+            }
+          }
+        },
+        {
+          "step": {
+            "step": 5,
+            "tool": "slack_send_message",
+            "parameters": {
+              "channel": "#customer-ops",
+              "message": "Processed quotation request for customer ABC Ltd."
+            },
+            "depends_on": [
+              4
+            ],
+            "description": "Notify the customer operations team"
+          },
+          "result": {
+            "success": true,
+            "tool": "slack_send_message",
+            "step": 5,
+            "result": {
+              "success": true,
+              "channel": "#customer-ops",
+              "status": "sent",
+              "message": "Processed quotation request for customer ABC Ltd."
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "workflows": [
+    {
+      "workflow_name": "Process Customer Request",
+      "intent": "Automatically process customer quotation requests.",
+      "actions": [
+        {
+          "step": 1,
+          "action": "gmail_read_email"
+        },
+        {
+          "step": 2,
+          "action": "gmail_download_attachment"
+        },
+        {
+          "step": 3,
+          "action": "crm_search_customer"
+        },
+        {
+          "step": 4,
+          "action": "crm_update_customer"
+        },
+        {
+          "step": 5,
+          "action": "slack_send_message"
+        }
+      ],
+      "confidence": 0.98,
+      "saved_at": "2026-09-26T14:07:39.456042"
+    }
+  ],
+  "learned_actions": []
+}

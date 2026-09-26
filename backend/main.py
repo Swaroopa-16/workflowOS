@@ -1,76 +1,169 @@
-"""
-WorkFlowOS - Main Application Server
-Exposes REST endpoints for triggering agents, workflows, and monitoring executions.
-"""
+from backend.workflow import workflow_validator
+from backend.agent.memory import AgentMemory
+from backend.ai.grok import GrokClient
 
-import sys
-from pathlib import Path
-
-# Add project root to sys.path
-root_dir = Path(__file__).resolve().parent.parent
-if str(root_dir) not in sys.path:
-    sys.path.insert(0, str(root_dir))
-
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Dict, Any, List, Optional
-
+from backend.agent.approval import ApprovalManager
 from backend.agent.agent import WorkFlowAgent
-from backend.ai.grok import default_grok_client
 
-app = FastAPI(
-    title="WorkFlowOS API",
-    description="Autonomous workflow discovery and execution backend.",
-    version="1.0.0"
+from backend.workflow.repetition_detector import RepetitionDetector
+from backend.workflow.workflow_generator import WorkflowGenerator
+
+from backend.agent.observer import ActivityObserver
+
+from backend.tools.gmail_tool import GmailTool
+from backend.tools.crm_tool import CRMTool
+from backend.tools.slack_tool import SlackTool
+
+
+class WorkFlowOS:
+
+    def __init__(self):
+
+        print("\n" + "=" * 70)
+        print("🚀 INITIALIZING WORKFLOWOS")
+        print("=" * 70)
+
+        # AI
+        self.grok = GrokClient()
+
+        # Activity observer
+        self.observer = ActivityObserver()
+
+        # Repetition detector
+        self.detector = RepetitionDetector()
+
+        # Workflow generator
+        self.generator = WorkflowGenerator(
+            self.grok
+        )
+
+        # Approval manager
+        self.approval = ApprovalManager()
+        self.memory = AgentMemory()
+
+        # Mock applications
+        self.gmail = GmailTool()
+        self.crm = CRMTool()
+        self.slack = SlackTool()
+
+        # Register tools
+        tools = {
+            "gmail_read_email":
+                self.gmail.read_email,
+
+            "gmail_download_attachment":
+                self.gmail.download_attachment,
+
+            "crm_search_customer":
+                self.crm.search_customer,
+
+            "crm_update_customer":
+                self.crm.update_customer,
+
+            "slack_send_message":
+                self.slack.send_message
+        }
+
+        # Main agent
+        self.agent = WorkFlowAgent(
+    tools=tools,
+    grok_client=self.grok,
+    memory=self.memory
 )
 
-# Enable CORS for frontend integration
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+        print("\n✅ WorkFlowOS initialized successfully.")
 
+    def detect_workflow(self, sessions):
 
-class WorkflowExecutionRequest(BaseModel):
-    name: str
-    trigger: str
-    actions: List[str]
-    condition: Optional[str] = None
-    max_steps: Optional[int] = 15
+        print("\n" + "=" * 70)
+        print("🔍 ANALYZING USER ACTIVITY")
+        print("=" * 70)
 
+        return self.detector.detect(
+            sessions
+        )
 
-@app.get("/")
-def root():
-    return {
-        "status": "online",
-        "service": "WorkFlowOS Backend",
-        "ai_provider": default_grok_client.provider,
-        "ai_model": default_grok_client.model
-    }
+    def generate_workflow(self, detected_workflow):
+        print("\n" + "=" * 70)
+        print("🧠 UNDERSTANDING REPEATED WORKFLOW")
+        print("=" * 70)
 
+        workflow = self.generator.generate(
+            detected_workflow
+        )
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+        # Remember the workflow
+        self.memory.save_workflow(
+            workflow
+        )
 
+        return workflow
+    def request_approval(self, workflow):
 
-@app.post("/api/agent/run")
-def run_agent(request: WorkflowExecutionRequest):
-    try:
-        agent = WorkFlowAgent()
-        workflow_data = request.model_dump()
-        max_steps = workflow_data.pop("max_steps", 15)
-        
-        result = agent.run(workflow_data, max_steps=max_steps)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return self.approval.request_approval(
+            workflow
+        )
+
+    def execute_workflow(self, workflow):
+
+        print("\n" + "=" * 70)
+        print("🤖 STARTING AI AGENT")
+        print("=" * 70)
+
+        return self.agent.run(
+            workflow
+        )
+
+    def run(self, sessions):
+
+        # 1. Detect repetition
+        detection = self.detect_workflow(
+            sessions
+        )
+
+        print("\nDetection Result:")
+        print(detection)
+
+        if not detection:
+
+            print(
+                "\nℹ️ No repeated workflow detected."
+            )
+
+            return {
+                "status":
+                    "no_repeated_workflow"
+            }
+
+        # 2. Generate workflow
+        workflow = self.generate_workflow(
+            detection
+        )
+
+        # 3. Ask for approval
+        approved = self.request_approval(
+            workflow
+        )
+
+        if not approved:
+
+            print(
+                "\n⏸️ Workflow postponed by user."
+            )
+
+            return {
+                "status":
+                    "workflow_postponed"
+            }
+
+        # 4. Execute approved workflow
+        return self.execute_workflow(
+            workflow
+        )
 
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
+
+    print(
+        "\nWorkFlowOS backend is ready."
+    )

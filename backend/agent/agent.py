@@ -1,203 +1,415 @@
-"""
-WorkFlowOS - Autonomous Workflow Agent
-Coordinates AI reasoning, step planning, tool execution, and self-correction.
-"""
+from backend.ai.grok import GrokClient
+from backend.agent.planner import WorkflowPlanner
+from backend.agent.executor import WorkflowExecutor
+from backend.agent.replanner import WorkflowReplanner
 
-import sys
-import os
-import json
-from pathlib import Path
-from typing import Any, Dict, Optional
-from dotenv import load_dotenv
-
-# Reconfigure Windows stdout to UTF-8
-if sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
-    except Exception:
-        pass
-
-# Add project root to sys.path
-root_dir = Path(__file__).resolve().parent.parent.parent
-if str(root_dir) not in sys.path:
-    sys.path.insert(0, str(root_dir))
-
-from backend.ai.grok import GrokClient, default_grok_client
-from backend.ai.prompts import SYSTEM_PROMPT, build_step_prompt
-from backend.agent.executor import Executor
-
-# Load environment
-root_dir = Path(__file__).resolve().parent.parent.parent
-load_dotenv(dotenv_path=root_dir / ".env")
-
-
-# ============================================================
-# MOCK TOOLS
-# ============================================================
-
-class MockTools:
-    """Mock implementations for Gmail, CRM, and Slack integrations."""
-
-    def gmail_read_email(self) -> Dict[str, Any]:
-        print("\n[Gmail] Reading customer email...")
-        return {
-            "success": True,
-            "customer": "ABC Ltd",
-            "email": "customer@abc.com",
-            "request": "New quotation required",
-            "attachment": "quotation.pdf"
-        }
-
-    def gmail_download_attachment(self, filename: str) -> Dict[str, Any]:
-        print(f"\n[Gmail] Downloading attachment: {filename}...")
-        return {
-            "success": True,
-            "file": filename
-        }
-
-    def crm_search_customer(self, customer: str) -> Dict[str, Any]:
-        print(f"\n[CRM] Searching for customer: {customer}...")
-        if customer == "ABC Ltd":
-            return {
-                "success": True,
-                "customer_id": "CRM-001",
-                "customer": customer
-            }
-        return {
-            "success": False,
-            "error": "Customer not found"
-        }
-
-    def crm_update_customer(self, customer_id: str, request: str, attachment: str) -> Dict[str, Any]:
-        print(f"\n[CRM] Updating customer {customer_id}...")
-        return {
-            "success": True,
-            "message": "Customer record updated"
-        }
-
-    def slack_send_message(self, channel: str, message: str) -> Dict[str, Any]:
-        print(f"\n[Slack] Sending message to {channel}...")
-        print(f"        {message}")
-        return {
-            "success": True,
-            "message": "Slack notification sent"
-        }
-
-
-# ============================================================
-# WORKFLOW AGENT
-# ============================================================
 
 class WorkFlowAgent:
-    """Autonomous agent that reasons through workflows and executes tools."""
 
-    def __init__(self, ai_client: Optional[GrokClient] = None, tools: Optional[Any] = None):
-        self.ai_client = ai_client or default_grok_client
-        self.tools = tools or MockTools()
-        self.executor = Executor(self.tools)
-        self.history = []
-        self.completed = False
+    def __init__(
+        self,
+        tools=None,
+        grok_client=None,
+        memory=None
+    ):
 
-    def ask_ai(self, workflow: dict, history: list) -> Dict[str, Any]:
-        """Queries the AI reasoning engine for the next atomic action."""
-        step_prompt = build_step_prompt(workflow, history)
-        return self.ai_client.chat_json(SYSTEM_PROMPT, step_prompt)
+        # AI reasoning engine
+        self.grok = grok_client or GrokClient()
 
-    def run(self, workflow: dict, max_steps: int = 15) -> Dict[str, Any]:
-        """Runs the autonomous workflow execution loop."""
-        print("\n===================================")
-        print("[AGENT] WorkFlowOS Agent Started")
-        print(f"[AI] Provider: {self.ai_client.provider} (Model: {self.ai_client.model})")
-        print("===================================")
-        print("\nDetected workflow:")
-        print(json.dumps(workflow, indent=2))
+        # Planning engine
+        self.planner = WorkflowPlanner(
+            self.grok
+        )
 
-        context = {
-            "workflow": workflow,
-            "history": []
-        }
+        # Execution engine
+        self.executor = WorkflowExecutor(
+            tools or {}
+        )
 
-        for step in range(max_steps):
-            print(f"\n\n========== AGENT STEP {step + 1} ==========")
+        # Replanning engine
+        self.replanner = WorkflowReplanner(
+            self.grok
+        )
 
-            try:
-                decision = self.ask_ai(workflow, context["history"])
-            except Exception as e:
-                print(f"[ERROR] During AI reasoning: {e}")
-                return {
-                    "status": "error",
-                    "error": str(e),
-                    "history": context["history"]
-                }
+        # Optional memory system
+        self.memory = memory
 
-            print("\n[DECISION] AI Decision:")
-            print(json.dumps(decision, indent=2))
+        # Execution history for the current run
+        self.execution_history = []
 
-            action = decision.get("action")
-            parameters = decision.get("parameters", {})
+    # ==========================================================
+    # MAIN AGENT LOOP
+    # ==========================================================
 
-            # Handle Complete
-            if action == "complete":
-                print("\n[OK] WORKFLOW COMPLETED SUCCESSFULLY")
-                self.completed = True
-                return {
-                    "status": "completed",
-                    "reason": decision.get("reason"),
-                    "history": context["history"]
-                }
+    def run(self, workflow):
 
-            # Handle Human Intervention Required
-            if action == "ask_user":
-                print("\n[PAUSE] Agent needs human intervention")
-                return {
-                    "status": "needs_user",
-                    "reason": decision.get("reason"),
-                    "history": context["history"]
-                }
+        print("\n")
+        print("=" * 70)
+        print("🤖 WORKFLOW AGENT STARTED")
+        print("=" * 70)
 
-            # Execute Tool via Executor
-            result = self.executor.execute(action, parameters)
-            print("\n[RESULT] Tool Execution Result:")
-            print(json.dumps(result, indent=2))
+        print(
+            f"\nWorkflow: "
+            f"{workflow.get('workflow_name', 'Unnamed Workflow')}"
+        )
 
-            # Record history
-            context["history"].append({
-                "action": action,
-                "parameters": parameters,
-                "result": result,
-                "reason": decision.get("reason")
+        # ------------------------------------------------------
+        # 1. CREATE EXECUTION PLAN
+        # ------------------------------------------------------
+
+        print("\n🧠 Creating execution plan...")
+
+        plan = self.planner.create_plan(
+            workflow,
+            self._get_memory()
+        )
+
+        self.planner.display_plan(plan)
+
+        # ------------------------------------------------------
+        # 2. EXECUTE PLAN STEP BY STEP
+        # ------------------------------------------------------
+
+        steps = plan.get(
+            "steps",
+            []
+        )
+
+        current_step_index = 0
+
+        while current_step_index < len(steps):
+
+            step = steps[current_step_index]
+
+            print("\n")
+            print(
+                f"📍 Agent executing step "
+                f"{current_step_index + 1}/"
+                f"{len(steps)}"
+            )
+
+            # --------------------------------------------------
+            # EXECUTE CURRENT STEP
+            # --------------------------------------------------
+
+            result = self.executor.execute_step(
+                step
+            )
+
+            # Save execution history
+            self.execution_history.append({
+                "step": step,
+                "result": result
             })
 
-        return {
-            "status": "failed",
-            "reason": "Maximum agent steps reached",
-            "history": context["history"]
+            # --------------------------------------------------
+            # SUCCESS
+            # --------------------------------------------------
+
+            if result.get("success"):
+
+                print(
+                    "\n✅ Agent observed successful result."
+                )
+
+                current_step_index += 1
+
+                continue
+
+            # --------------------------------------------------
+            # FAILURE
+            # --------------------------------------------------
+
+            print(
+                "\n⚠️ Agent observed a failed step."
+            )
+
+            print(
+                "🧠 Asking Grok to replan..."
+            )
+
+            decision = self.replanner.replan(
+
+                workflow=workflow,
+
+                current_plan=plan,
+
+                failed_step=step,
+
+                tool_result=result,
+
+                execution_history=
+                    self.execution_history
+            )
+
+            decision_type = decision.get(
+                "decision"
+            )
+
+            # --------------------------------------------------
+            # RETRY
+            # --------------------------------------------------
+
+            if decision_type == "retry":
+
+                print(
+                    "\n🔄 Agent will retry the step."
+                )
+
+                continue
+
+            # --------------------------------------------------
+            # ALTERNATIVE
+            # --------------------------------------------------
+
+            if decision_type == "alternative":
+
+                next_action = decision.get(
+                    "next_action",
+                    {}
+                )
+
+                if not next_action:
+
+                    print(
+                        "\n❌ No alternative action "
+                        "was provided."
+                    )
+
+                    return self._ask_user(
+                        decision
+                    )
+
+                alternative_step = {
+
+                    "step":
+                        step.get("step"),
+
+                    "tool":
+                        next_action.get("tool"),
+
+                    "parameters":
+                        next_action.get(
+                            "parameters",
+                            {}
+                        ),
+
+                    "depends_on":
+                        step.get(
+                            "depends_on",
+                            []
+                        ),
+
+                    "description":
+                        "Alternative action selected by agent."
+                }
+
+                print(
+                    "\n🔀 Executing alternative action."
+                )
+
+                alternative_result = (
+                    self.executor.execute_step(
+                        alternative_step
+                    )
+                )
+
+                self.execution_history.append({
+
+                    "step":
+                        alternative_step,
+
+                    "result":
+                        alternative_result
+                })
+
+                if alternative_result.get(
+                    "success"
+                ):
+
+                    print(
+                        "\n✅ Alternative action succeeded."
+                    )
+
+                    current_step_index += 1
+
+                    continue
+
+                print(
+                    "\n❌ Alternative action failed."
+                )
+
+                return self._ask_user({
+                    "message":
+                        "The alternative action "
+                        "also failed."
+                })
+
+            # --------------------------------------------------
+            # CONTINUE
+            # --------------------------------------------------
+
+            if decision_type == "continue":
+
+                print(
+                    "\n➡️ Agent decided to continue."
+                )
+
+                current_step_index += 1
+
+                continue
+
+            # --------------------------------------------------
+            # COMPLETE
+            # --------------------------------------------------
+
+            if decision_type == "complete":
+
+                print(
+                    "\n✅ Grok determined that "
+                    "the workflow is complete."
+                )
+
+                return self._complete()
+
+            # --------------------------------------------------
+            # ASK USER
+            # --------------------------------------------------
+
+            if decision_type == "ask_user":
+
+                return self._ask_user(
+                    decision
+                )
+
+            # --------------------------------------------------
+            # UNKNOWN DECISION
+            # --------------------------------------------------
+
+            print(
+                "\n❌ Unknown agent decision:"
+            )
+
+            print(
+                decision_type
+            )
+
+            return self._ask_user({
+
+                "message":
+                    "The agent could not "
+                    "determine the next action."
+            })
+
+        # ------------------------------------------------------
+        # ALL STEPS COMPLETED
+        # ------------------------------------------------------
+
+        return self._complete()
+
+    # ==========================================================
+    # WORKFLOW COMPLETED
+    # ==========================================================
+
+    def _complete(self):
+
+        print("\n")
+        print("=" * 70)
+        print("🎉 WORKFLOW COMPLETED SUCCESSFULLY")
+        print("=" * 70)
+
+        result = {
+
+            "success": True,
+
+            "status":
+                "completed",
+
+            "execution_history":
+                self.execution_history
         }
 
+        self._save_memory(
+            result
+        )
 
-# ============================================================
-# ENTRYPOINT
-# ============================================================
+        return result
 
-if __name__ == "__main__":
-    discovered_workflow = {
-        "name": "Process Customer Request",
-        "trigger": "New customer request in Gmail",
-        "actions": [
-            "Read customer email",
-            "Download attachment",
-            "Find customer in CRM",
-            "Update customer record",
-            "Notify team in Slack"
-        ],
-        "condition": "If customer cannot be found, ask user"
-    }
+    # ==========================================================
+    # HUMAN INTERVENTION
+    # ==========================================================
 
-    agent = WorkFlowAgent()
-    result = agent.run(discovered_workflow)
+    def _ask_user(self, decision):
 
-    print("\n\n===================================")
-    print("FINAL RESULT")
-    print("===================================")
-    print(json.dumps(result, indent=2))
+        print("\n")
+        print("=" * 70)
+        print("👤 HUMAN INTERVENTION REQUIRED")
+        print("=" * 70)
+
+        message = decision.get(
+
+            "message",
+
+            "The agent requires your input."
+        )
+
+        print(
+            f"\n🤖 Agent:\n{message}"
+        )
+
+        result = {
+
+            "success": False,
+
+            "status":
+                "human_intervention_required",
+
+            "message":
+                message,
+
+            "execution_history":
+                self.execution_history
+        }
+
+        self._save_memory(
+            result
+        )
+
+        return result
+
+    # ==========================================================
+    # MEMORY
+    # ==========================================================
+
+    def _get_memory(self):
+
+        if self.memory is None:
+
+            return {}
+
+        try:
+
+            return self.memory.get_agent_context()
+
+        except Exception:
+
+            return {}
+
+    def _save_memory(self, result):
+
+        if self.memory is None:
+
+            return
+
+        try:
+
+            self.memory.save_execution(
+                result
+            )
+
+        except Exception as error:
+
+            print(
+                f"⚠️ Could not save memory: "
+                f"{error}"
+            )

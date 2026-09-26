@@ -4,7 +4,6 @@ from typing import Any, Dict
 class WorkflowExecutor:
 
     def __init__(self, tools=None):
-
         self.tools = tools or {}
 
     def execute_step(
@@ -43,6 +42,10 @@ class WorkflowExecutor:
             f"Parameters: {parameters}"
         )
 
+        # -------------------------------------------------
+        # Check tool exists
+        # -------------------------------------------------
+
         if tool_name not in self.tools:
 
             print(
@@ -53,11 +56,19 @@ class WorkflowExecutor:
                 "success": False,
                 "tool": tool_name,
                 "step": step.get("step"),
-                "error":
-                    f"Tool '{tool_name}' is not registered."
+                "error": (
+                    f"Tool '{tool_name}' "
+                    f"is not registered."
+                )
             }
 
-        tool_function = self.tools[tool_name]
+        tool_function = self.tools[
+            tool_name
+        ]
+
+        # -------------------------------------------------
+        # Execute tool
+        # -------------------------------------------------
 
         try:
 
@@ -65,7 +76,48 @@ class WorkflowExecutor:
                 **parameters
             )
 
-            print("\n✅ STEP COMPLETED")
+            # ---------------------------------------------
+            # IMPORTANT:
+            # The tool itself can return success=False.
+            # That must be treated as a failed step.
+            # ---------------------------------------------
+
+            if isinstance(result, dict):
+
+                tool_success = result.get(
+                    "success",
+                    True
+                )
+
+                if tool_success is False:
+
+                    print(
+                        "\n❌ STEP FAILED"
+                    )
+
+                    print(
+                        f"Reason: "
+                        f"{result.get('error', 'Tool reported failure.')}"
+                    )
+
+                    return {
+                        "success": False,
+                        "tool": tool_name,
+                        "step": step.get("step"),
+                        "error": result.get(
+                            "error",
+                            "Tool reported failure."
+                        ),
+                        "result": result
+                    }
+
+            # ---------------------------------------------
+            # Successful execution
+            # ---------------------------------------------
+
+            print(
+                "\n✅ STEP COMPLETED"
+            )
 
             print(
                 f"Result: {result}"
@@ -80,7 +132,9 @@ class WorkflowExecutor:
 
         except Exception as error:
 
-            print("\n❌ STEP FAILED")
+            print(
+                "\n❌ STEP FAILED"
+            )
 
             print(
                 f"Error: {error}"
@@ -101,15 +155,22 @@ class WorkflowExecutor:
 
         results = []
 
-        for step in plan.get("steps", []):
+        for step in plan.get(
+            "steps",
+            []
+        ):
 
-            result = self.execute_step(step)
+            result = self.execute_step(
+                step
+            )
 
             results.append(result)
 
             if not result["success"]:
 
-                print("\n⏸️ WORKFLOW PAUSED")
+                print(
+                    "\n⏸️ WORKFLOW PAUSED"
+                )
 
                 print(
                     "Reason: Previous step failed."
@@ -118,8 +179,9 @@ class WorkflowExecutor:
                 return {
                     "success": False,
                     "completed_steps": results,
-                    "failed_step":
-                        step.get("step"),
+                    "failed_step": step.get(
+                        "step"
+                    ),
                     "results": results
                 }
 
@@ -129,7 +191,6 @@ class WorkflowExecutor:
 
         return {
             "success": True,
-            "completed_steps":
-                len(results),
+            "completed_steps": len(results),
             "results": results
         }
