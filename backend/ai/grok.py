@@ -157,6 +157,29 @@ class GrokClient:
                 },
                 "reason": "Email read. Downloading quotation attachment."
             })
+        elif "sequence" in user_prompt or "detected_workflow" in user_prompt:
+            return json.dumps({
+                "name": "Process Customer Request & Update CRM",
+                "description": "Reads incoming customer requests from Gmail, downloads quotations, finds and updates the CRM record, and notifies the team on Slack.",
+                "trigger": "New customer request email in Gmail",
+                "actions": [
+                    "Read customer email",
+                    "Download attachment",
+                    "Find customer in CRM",
+                    "Update customer record",
+                    "Notify team in Slack"
+                ],
+                "steps": [
+                    {"step": 1, "action": "gmail_read_email", "name": "Read Customer Email", "description": "Fetch email content and attachment reference"},
+                    {"step": 2, "action": "gmail_download_attachment", "name": "Download Attachment", "description": "Save quotation PDF to local workspace"},
+                    {"step": 3, "action": "crm_search_customer", "name": "Search CRM Customer", "description": "Query CRM by company name"},
+                    {"step": 4, "action": "crm_update_customer", "name": "Update Customer Record", "description": "Attach file and update status in CRM"},
+                    {"step": 5, "action": "slack_send_message", "name": "Notify Team in Slack", "description": "Send confirmation message to #customer-ops"}
+                ],
+                "condition": "If customer cannot be found in CRM, pause and request human intervention",
+                "confidence": 0.98,
+                "estimated_time_saved_minutes": 15
+            })
         else:
             return json.dumps({
                 "action": "gmail_read_email",
@@ -165,5 +188,6 @@ class GrokClient:
             })
 
 
-# Global default client instance
+# Global default client instance and aliases
 default_grok_client = GrokClient()
+GrokAI = GrokClient

@@ -1,157 +1,135 @@
-"""
-WorkFlowOS - Executor
-
-Responsible for:
-1. Receiving an action selected by the AI agent
-2. Calling the correct tool
-3. Returning a structured result
-4. Handling tool errors safely
-
-The executor does NOT decide what action should happen next.
-That decision belongs to the Grok / AI-powered reasoning agent.
-"""
-
 from typing import Any, Dict
 
 
-class Executor:
-    """
-    Executes actions selected by the WorkFlowOS agent.
-    """
+class WorkflowExecutor:
 
-    def __init__(self, tools):
-        self.tools = tools
+    def __init__(self, tools=None):
 
-        # Map agent action names to actual Python functions
-        self.action_map = {
-            "gmail_read_email": self._gmail_read_email,
-            "gmail_download_attachment": self._gmail_download_attachment,
-            "crm_search_customer": self._crm_search_customer,
-            "crm_update_customer": self._crm_update_customer,
-            "slack_send_message": self._slack_send_message,
-        }
+        self.tools = tools or {}
 
-    # =========================================================
-    # MAIN EXECUTOR
-    # =========================================================
-
-    def execute(
+    def execute_step(
         self,
-        action: str,
-        parameters: Dict[str, Any] | None = None
+        step: Dict[str, Any]
     ) -> Dict[str, Any]:
 
-        parameters = parameters or {}
+        tool_name = step.get("tool")
 
-        print(f"\n[EXECUTOR] Executing: {action}")
-        print(f"           Parameters: {parameters}")
+        if not tool_name:
 
-        # Check whether action exists
-        if action not in self.action_map:
             return {
                 "success": False,
-                "action": action,
-                "error": f"Unknown action: {action}"
+                "tool": None,
+                "error": "Step does not contain a tool."
             }
+
+        parameters = step.get(
+            "parameters",
+            {}
+        )
+
+        print("\n" + "-" * 60)
+        print("⚙️ EXECUTING STEP")
+        print("-" * 60)
+
+        print(
+            f"Step: {step.get('step')}"
+        )
+
+        print(
+            f"Tool: {tool_name}"
+        )
+
+        print(
+            f"Parameters: {parameters}"
+        )
+
+        if tool_name not in self.tools:
+
+            print(
+                f"❌ Tool not found: {tool_name}"
+            )
+
+            return {
+                "success": False,
+                "tool": tool_name,
+                "step": step.get("step"),
+                "error":
+                    f"Tool '{tool_name}' is not registered."
+            }
+
+        tool_function = self.tools[tool_name]
 
         try:
-            function = self.action_map[action]
-            result = function(parameters)
 
-            # Make sure every tool returns a dictionary
-            if not isinstance(result, dict):
-                result = {
-                    "success": True,
-                    "data": result
+            result = tool_function(
+                **parameters
+            )
+
+            print("\n✅ STEP COMPLETED")
+
+            print(
+                f"Result: {result}"
+            )
+
+            return {
+                "success": True,
+                "tool": tool_name,
+                "step": step.get("step"),
+                "result": result
+            }
+
+        except Exception as error:
+
+            print("\n❌ STEP FAILED")
+
+            print(
+                f"Error: {error}"
+            )
+
+            return {
+                "success": False,
+                "tool": tool_name,
+                "step": step.get("step"),
+                "error": str(error)
+            }
+
+    def execute_plan(self, plan):
+
+        print("\n" + "=" * 60)
+        print("🚀 EXECUTING WORKFLOW")
+        print("=" * 60)
+
+        results = []
+
+        for step in plan.get("steps", []):
+
+            result = self.execute_step(step)
+
+            results.append(result)
+
+            if not result["success"]:
+
+                print("\n⏸️ WORKFLOW PAUSED")
+
+                print(
+                    "Reason: Previous step failed."
+                )
+
+                return {
+                    "success": False,
+                    "completed_steps": results,
+                    "failed_step":
+                        step.get("step"),
+                    "results": results
                 }
 
-            result["action"] = action
-            return result
+        print("\n" + "=" * 60)
+        print("✅ WORKFLOW COMPLETED")
+        print("=" * 60)
 
-        except Exception as e:
-            print(f"[ERROR] Executor exception: {e}")
-            return {
-                "success": False,
-                "action": action,
-                "error": str(e)
-            }
-
-    # =========================================================
-    # GMAIL
-    # =========================================================
-
-    def _gmail_read_email(self, params):
-        print("  -> [Gmail] Reading email")
-        return self.tools.gmail_read_email()
-
-    # ---------------------------------------------------------
-
-    def _gmail_download_attachment(self, params):
-        filename = params.get("filename")
-        if not filename:
-            return {
-                "success": False,
-                "error": "Attachment filename is required"
-            }
-        print(f"  -> [Gmail] Downloading: {filename}")
-        return self.tools.gmail_download_attachment(filename)
-
-    # =========================================================
-    # CRM
-    # =========================================================
-
-    def _crm_search_customer(self, params):
-        customer = params.get("customer")
-        if not customer:
-            return {
-                "success": False,
-                "error": "Customer name is required"
-            }
-        print(f"  -> [CRM] Searching: {customer}")
-        return self.tools.crm_search_customer(customer)
-
-    # ---------------------------------------------------------
-
-    def _crm_update_customer(self, params):
-        customer_id = params.get("customer_id")
-        request = params.get("request")
-        attachment = params.get("attachment")
-
-        if not customer_id:
-            return {
-                "success": False,
-                "error": "customer_id is required"
-            }
-
-        print(f"  -> [CRM] Updating customer: {customer_id}")
-        return self.tools.crm_update_customer(
-            customer_id=customer_id,
-            request=request,
-            attachment=attachment
-        )
-
-    # =========================================================
-    # SLACK
-    # =========================================================
-
-    def _slack_send_message(self, params):
-        channel = params.get("channel")
-        message = params.get("message")
-
-        if not channel:
-            return {
-                "success": False,
-                "error": "Slack channel is required"
-            }
-
-        if not message:
-            return {
-                "success": False,
-                "error": "Slack message is required"
-            }
-
-        print(f"  -> [Slack] Sending message to {channel}")
-        return self.tools.slack_send_message(
-            channel=channel,
-            message=message
-        )
+        return {
+            "success": True,
+            "completed_steps":
+                len(results),
+            "results": results
+        }
