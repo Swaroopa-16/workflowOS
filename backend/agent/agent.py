@@ -1,29 +1,46 @@
+"""
+WorkFlowOS - Autonomous Workflow Agent
+Coordinates AI reasoning, step planning, tool execution, and self-correction.
+"""
+
+import sys
 import os
 import json
-from groq import Groq
+from pathlib import Path
+from typing import Any, Dict, Optional
+from dotenv import load_dotenv
 
+# Reconfigure Windows stdout to UTF-8
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
-# ============================================================
-# GROK CLIENT
-# ============================================================
+# Add project root to sys.path
+root_dir = Path(__file__).resolve().parent.parent.parent
+if str(root_dir) not in sys.path:
+    sys.path.insert(0, str(root_dir))
 
-client = Groq(
-    api_key=os.getenv("GROQ_API_KEY")
-)
+from backend.ai.grok import GrokClient, default_grok_client
+from backend.ai.prompts import SYSTEM_PROMPT, build_step_prompt
+from backend.agent.executor import Executor
 
-MODEL = "openai/gpt-oss-120b"
+# Load environment
+root_dir = Path(__file__).resolve().parent.parent.parent
+load_dotenv(dotenv_path=root_dir / ".env")
 
 
 # ============================================================
 # MOCK TOOLS
-# These will later be replaced with real Gmail / CRM / Slack
 # ============================================================
 
 class MockTools:
+    """Mock implementations for Gmail, CRM, and Slack integrations."""
 
-    def gmail_read_email(self):
-        print("\n📧 Gmail: Reading customer email...")
-
+    def gmail_read_email(self) -> Dict[str, Any]:
+        print("\n[Gmail] Reading customer email...")
         return {
             "success": True,
             "customer": "ABC Ltd",
@@ -32,306 +49,124 @@ class MockTools:
             "attachment": "quotation.pdf"
         }
 
-    def gmail_download_attachment(self, filename):
-        print(f"\n📎 Gmail: Downloading {filename}...")
-
+    def gmail_download_attachment(self, filename: str) -> Dict[str, Any]:
+        print(f"\n[Gmail] Downloading attachment: {filename}...")
         return {
             "success": True,
             "file": filename
         }
 
-    def crm_search_customer(self, customer):
-        print(f"\n🏢 CRM: Searching for {customer}...")
-
-        # Change to False to test agent recovery
+    def crm_search_customer(self, customer: str) -> Dict[str, Any]:
+        print(f"\n[CRM] Searching for customer: {customer}...")
         if customer == "ABC Ltd":
             return {
                 "success": True,
                 "customer_id": "CRM-001",
                 "customer": customer
             }
-
         return {
             "success": False,
             "error": "Customer not found"
         }
 
-    def crm_update_customer(self, customer_id, request, attachment):
-        print(f"\n🏢 CRM: Updating customer {customer_id}...")
-
+    def crm_update_customer(self, customer_id: str, request: str, attachment: str) -> Dict[str, Any]:
+        print(f"\n[CRM] Updating customer {customer_id}...")
         return {
             "success": True,
             "message": "Customer record updated"
         }
 
-    def slack_send_message(self, channel, message):
-        print(f"\n💬 Slack: Sending message to {channel}...")
-        print(f"   {message}")
-
+    def slack_send_message(self, channel: str, message: str) -> Dict[str, Any]:
+        print(f"\n[Slack] Sending message to {channel}...")
+        print(f"        {message}")
         return {
             "success": True,
             "message": "Slack notification sent"
         }
 
 
-tools = MockTools()
-
-
 # ============================================================
-# TOOL DEFINITIONS FOR GROK
-# ============================================================
-
-TOOL_DEFINITIONS = {
-    "gmail_read_email": {
-        "description": "Read the latest customer email",
-        "parameters": {}
-    },
-
-    "gmail_download_attachment": {
-        "description": "Download an email attachment",
-        "parameters": {
-            "filename": "string"
-        }
-    },
-
-    "crm_search_customer": {
-        "description": "Search for a customer in the CRM",
-        "parameters": {
-            "customer": "string"
-        }
-    },
-
-    "crm_update_customer": {
-        "description": "Update a customer record",
-        "parameters": {
-            "customer_id": "string",
-            "request": "string",
-            "attachment": "string"
-        }
-    },
-
-    "slack_send_message": {
-        "description": "Send a notification to Slack",
-        "parameters": {
-            "channel": "string",
-            "message": "string"
-        }
-    }
-}
-
-
-# ============================================================
-# GROK AGENT
+# WORKFLOW AGENT
 # ============================================================
 
 class WorkFlowAgent:
+    """Autonomous agent that reasons through workflows and executes tools."""
 
-    def __init__(self):
+    def __init__(self, ai_client: Optional[GrokClient] = None, tools: Optional[Any] = None):
+        self.ai_client = ai_client or default_grok_client
+        self.tools = tools or MockTools()
+        self.executor = Executor(self.tools)
         self.history = []
         self.completed = False
 
-    def ask_grok(self, instruction):
+    def ask_ai(self, workflow: dict, history: list) -> Dict[str, Any]:
+        """Queries the AI reasoning engine for the next atomic action."""
+        step_prompt = build_step_prompt(workflow, history)
+        return self.ai_client.chat_json(SYSTEM_PROMPT, step_prompt)
 
-        response = client.chat.completions.create(
-            model=MODEL,
-
-            messages=[
-                {
-                    "role": "system",
-                    "content": """
-You are the reasoning engine of WorkFlowOS.
-
-You are an agentic workflow automation agent.
-
-Your job is to:
-
-1. Understand the discovered workflow.
-2. Decide the next action.
-3. Select an available tool.
-4. Examine the tool result.
-5. Decide what to do next.
-6. Recover from failures when possible.
-7. Stop and request human intervention when necessary.
-
-IMPORTANT:
-- Never invent tool results.
-- Only use available tools.
-- Do not execute multiple actions at once.
-- After every tool result, reason about the next action.
-- Return ONLY valid JSON.
-
-Available tools:
-
-gmail_read_email
-gmail_download_attachment
-crm_search_customer
-crm_update_customer
-slack_send_message
-
-JSON format:
-
-{
-    "action": "tool_name | complete | ask_user",
-    "parameters": {},
-    "reason": "short explanation"
-}
-"""
-                },
-
-                {
-                    "role": "user",
-                    "content": instruction
-                }
-            ],
-
-            temperature=0.1
-        )
-
-        content = response.choices[0].message.content
-
-        # Remove markdown code fences if Grok returns them
-        content = content.replace("```json", "")
-        content = content.replace("```", "")
-        content = content.strip()
-
-        return json.loads(content)
-
-    # --------------------------------------------------------
-
-    def execute_tool(self, action, parameters):
-
-        if action == "gmail_read_email":
-            return tools.gmail_read_email()
-
-        elif action == "gmail_download_attachment":
-            return tools.gmail_download_attachment(
-                parameters["filename"]
-            )
-
-        elif action == "crm_search_customer":
-            return tools.crm_search_customer(
-                parameters["customer"]
-            )
-
-        elif action == "crm_update_customer":
-            return tools.crm_update_customer(
-                parameters["customer_id"],
-                parameters["request"],
-                parameters["attachment"]
-            )
-
-        elif action == "slack_send_message":
-            return tools.slack_send_message(
-                parameters["channel"],
-                parameters["message"]
-            )
-
-        return {
-            "success": False,
-            "error": "Unknown tool"
-        }
-
-    # --------------------------------------------------------
-
-    def run(self, workflow):
-
+    def run(self, workflow: dict, max_steps: int = 15) -> Dict[str, Any]:
+        """Runs the autonomous workflow execution loop."""
         print("\n===================================")
-        print("🤖 WorkFlowOS Agent Started")
+        print("[AGENT] WorkFlowOS Agent Started")
+        print(f"[AI] Provider: {self.ai_client.provider} (Model: {self.ai_client.model})")
         print("===================================")
-
         print("\nDetected workflow:")
-        print(workflow)
+        print(json.dumps(workflow, indent=2))
 
         context = {
             "workflow": workflow,
             "history": []
         }
 
-        max_steps = 15
-
         for step in range(max_steps):
-
             print(f"\n\n========== AGENT STEP {step + 1} ==========")
 
-            instruction = f"""
-A repeated workflow has been detected.
+            try:
+                decision = self.ask_ai(workflow, context["history"])
+            except Exception as e:
+                print(f"[ERROR] During AI reasoning: {e}")
+                return {
+                    "status": "error",
+                    "error": str(e),
+                    "history": context["history"]
+                }
 
-Workflow:
-
-{json.dumps(workflow, indent=2)}
-
-Previous execution history:
-
-{json.dumps(context["history"], indent=2)}
-
-Determine the NEXT action.
-
-Remember:
-- Execute only one tool.
-- Examine previous results.
-- If the workflow is successfully completed, return "complete".
-- If you cannot safely continue, return "ask_user".
-"""
-
-            decision = self.ask_grok(instruction)
-
-            print("\n🧠 Grok decision:")
+            print("\n[DECISION] AI Decision:")
             print(json.dumps(decision, indent=2))
 
             action = decision.get("action")
             parameters = decision.get("parameters", {})
 
-            # -----------------------------------------------
-            # COMPLETE
-            # -----------------------------------------------
-
+            # Handle Complete
             if action == "complete":
-
-                print("\n✅ WORKFLOW COMPLETED")
-
+                print("\n[OK] WORKFLOW COMPLETED SUCCESSFULLY")
                 self.completed = True
-
                 return {
                     "status": "completed",
+                    "reason": decision.get("reason"),
                     "history": context["history"]
                 }
 
-            # -----------------------------------------------
-            # ASK USER
-            # -----------------------------------------------
-
+            # Handle Human Intervention Required
             if action == "ask_user":
-
-                print("\n⚠️ Agent needs human intervention")
-
+                print("\n[PAUSE] Agent needs human intervention")
                 return {
                     "status": "needs_user",
                     "reason": decision.get("reason"),
                     "history": context["history"]
                 }
 
-            # -----------------------------------------------
-            # EXECUTE TOOL
-            # -----------------------------------------------
-
-            print(f"\n🔧 Executing: {action}")
-
-            result = self.execute_tool(
-                action,
-                parameters
-            )
-
-            print("\n📊 Tool result:")
+            # Execute Tool via Executor
+            result = self.executor.execute(action, parameters)
+            print("\n[RESULT] Tool Execution Result:")
             print(json.dumps(result, indent=2))
 
-            # -----------------------------------------------
-            # SAVE OBSERVATION
-            # -----------------------------------------------
-
+            # Record history
             context["history"].append({
                 "action": action,
                 "parameters": parameters,
-                "result": result
+                "result": result,
+                "reason": decision.get("reason")
             })
 
         return {
@@ -342,17 +177,13 @@ Remember:
 
 
 # ============================================================
-# EXAMPLE DISCOVERED WORKFLOW
-# In the real application this comes from repetition_detector
+# ENTRYPOINT
 # ============================================================
 
 if __name__ == "__main__":
-
     discovered_workflow = {
         "name": "Process Customer Request",
-
         "trigger": "New customer request in Gmail",
-
         "actions": [
             "Read customer email",
             "Download attachment",
@@ -360,21 +191,13 @@ if __name__ == "__main__":
             "Update customer record",
             "Notify team in Slack"
         ],
-
         "condition": "If customer cannot be found, ask user"
     }
 
     agent = WorkFlowAgent()
-
-    result = agent.run(
-        discovered_workflow
-    )
+    result = agent.run(discovered_workflow)
 
     print("\n\n===================================")
     print("FINAL RESULT")
     print("===================================")
-
-    print(json.dumps(
-        result,
-        indent=2
-    ))
+    print(json.dumps(result, indent=2))
